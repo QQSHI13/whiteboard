@@ -1,4 +1,4 @@
-# CollabBoard 🎨
+# CollaBoard 🎨
 
 Real-time collaborative whiteboard using WebRTC data channels. Draw together with friends or colleagues without any server — pure peer-to-peer.
 
