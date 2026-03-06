@@ -907,6 +907,9 @@
         }
 
         function joinRoom(code) {
+            // Hide modal immediately when connect is clicked
+            joinModal.classList.add('hidden');
+            
             // Clear any existing connection timeout
             if (connectionTimeout) {
                 clearTimeout(connectionTimeout);
