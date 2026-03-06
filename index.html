@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CollaBoard - Real-time Collaborative Whiteboard</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect x='10' y='10' width='80' height='80' rx='10' fill='%2358a6ff'/%3E%3Crect x='25' y='25' width='20' height='20' rx='3' fill='white'/%3E%3Crect x='55' y='25' width='20' height='20' rx='3' fill='white'/%3E%3Crect x='25' y='55' width='20' height='20' rx='3' fill='white'/%3E%3Crect x='55' y='55' width='20' height='20' rx='3' fill='white'/%3E%3C/svg%3E">
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
         * {
@@ -711,6 +712,10 @@
             };
         }
 
+        function isInsideCanvas(x, y) {
+            return x >= 0 && x <= canvas.width && y >= 0 && y <= canvas.height;
+        }
+
         function startDrawing(e) {
             e.preventDefault();
             isDrawing = true;
@@ -794,11 +799,22 @@
                 return;
             }
             lastCursorBroadcast = now;
-            broadcast({ type: 'cursor', x, y });
+            
+            // Only broadcast if inside canvas
+            if (isInsideCanvas(x, y)) {
+                broadcast({ type: 'cursor', x, y, visible: true });
+            }
+        }
+
+        function broadcastCursorHide() {
+            broadcast({ type: 'cursor', visible: false });
         }
 
         // ==================== PEER CURSOR ====================
         function createPeerCursor(peerId) {
+            // Remove existing cursor if any
+            removePeerCursor(peerId);
+            
             const color = getPeerColor(peerId);
             
             const cursor = document.createElement('div');
@@ -814,12 +830,7 @@
                 <span class="peer-label">P${peerIndex}</span>
             `;
             container.appendChild(cursor);
-            
-            // Store cursor reference in connection data
-            const connData = connections.get(peerId);
-            if (connData) {
-                connData.cursor = cursor;
-            }
+            peerCursors.set(peerId, cursor);
             
             return cursor;
         }
@@ -841,8 +852,23 @@
             }
         }
 
+        function removeAllPeerCursors() {
+            peerCursors.forEach((cursor, peerId) => {
+                cursor.remove();
+            });
+            peerCursors.clear();
+        }
+
         // ==================== WEBRTC / PEERJS ====================
         function initPeer(code) {
+            // Clean up existing peer if any
+            if (peer) {
+                peer.destroy();
+                peer = null;
+            }
+            connections.clear();
+            removeAllPeerCursors();
+            
             roomCode = code;
             roomCodeDisplay.textContent = roomCode;
             
@@ -860,7 +886,7 @@
             
             peer.on('connection', (conn) => {
                 console.log('Incoming connection from:', conn.peer);
-                handleConnection(conn);
+                handleConnection(conn, false);
             });
             
             peer.on('error', (err) => {
@@ -887,12 +913,21 @@
                 connectionTimeout = null;
             }
             
+            // Clean up existing peer if any
+            if (peer) {
+                peer.destroy();
+                peer = null;
+            }
+            connections.clear();
+            removeAllPeerCursors();
+            
             roomCode = code;
             roomCodeDisplay.textContent = roomCode;
             
             updateStatus('connecting', 'Connecting...');
             
-            const myId = generateRoomCode() + Math.random().toString(36).substring(2, 6);
+            // Use a shorter, valid peer ID
+            const myId = 'u' + Date.now().toString(36) + Math.random().toString(36).substring(2, 4);
             peer = new Peer(myId, PEER_CONFIG);
             
             peer.on('open', () => {
@@ -920,7 +955,7 @@
                         connectionTimeout = null;
                     }
                     console.log('Connected to host');
-                    handleConnection(conn);
+                    handleConnection(conn, true); // true = isHostConnection
                     updateStatus('connected', 'Connected');
                     joinModal.classList.add('hidden');
                     showToast('Joined Room', `Connected to ${roomCode}`, 'success');
@@ -936,9 +971,15 @@
                 });
             });
             
+            // Handle incoming connections from other peers (multi-peer mesh)
             peer.on('connection', (conn) => {
-                // Handle connections from other peers (for multi-peer mesh)
-                handleConnection(conn);
+                // Only accept connections from peers in the same room
+                if (conn.peer !== roomCode && !conn.peer.startsWith(roomCode)) {
+                    console.log('Rejecting connection from unknown peer:', conn.peer);
+                    conn.close();
+                    return;
+                }
+                handleConnection(conn, false);
             });
             
             peer.on('error', (err) => {
@@ -952,8 +993,15 @@
             });
         }
 
-        function handleConnection(conn) {
+        function handleConnection(conn, isHostConnection = false) {
             const peerId = conn.peer;
+            
+            // Prevent duplicate connections
+            if (connections.has(peerId)) {
+                console.log('Already connected to peer:', peerId);
+                conn.close();
+                return;
+            }
             
             // Create data channel for drawing data
             const dataConn = conn;
@@ -961,7 +1009,7 @@
             connections.set(peerId, {
                 conn: conn,
                 dataConn: dataConn,
-                cursor: null
+                isHostConnection: isHostConnection
             });
             
             dataConn.on('data', (data) => {
@@ -982,6 +1030,7 @@
             showToast('Peer Connected', `New peer joined`, 'success');
             
             // Send current canvas state to new peer (if host)
+            // Delay to ensure peer is ready to receive
             if (isHost) {
                 setTimeout(() => {
                     try {
@@ -992,7 +1041,7 @@
                     } catch (err) {
                         console.error('Failed to send canvas state:', err);
                     }
-                }, 500);
+                }, 1000); // Increased delay for better reliability
             }
         }
 
@@ -1005,7 +1054,11 @@
                     ctx.clearRect(0, 0, canvas.width, canvas.height);
                     break;
                 case 'cursor':
-                    updatePeerCursor(peerId, data.x, data.y);
+                    if (data.visible === false) {
+                        removePeerCursor(peerId);
+                    } else if (data.x !== undefined && data.y !== undefined) {
+                        updatePeerCursor(peerId, data.x, data.y);
+                    }
                     break;
                 case 'canvas':
                     // Received full canvas state
@@ -1031,10 +1084,24 @@
 
         function removePeer(peerId) {
             removePeerCursor(peerId);
+            const connData = connections.get(peerId);
+            if (connData) {
+                if (connData.dataConn) connData.dataConn.close();
+                if (connData.conn) connData.conn.close();
+            }
             connections.delete(peerId);
             updatePeersList();
             showToast('Peer Disconnected', 'A peer left the room');
         }
+
+        // ==================== CLEANUP ON PAGE UNLOAD ====================
+        window.addEventListener('beforeunload', () => {
+            connections.forEach((connData, peerId) => {
+                if (connData.dataConn) connData.dataConn.close();
+                if (connData.conn) connData.conn.close();
+            });
+            if (peer) peer.destroy();
+        });
 
         // ==================== EVENT LISTENERS ====================
         
@@ -1049,7 +1116,20 @@
             }
         });
         canvas.addEventListener('mouseup', stopDrawing);
-        canvas.addEventListener('mouseout', stopDrawing);
+        canvas.addEventListener('mouseout', () => {
+            stopDrawing();
+            // Hide cursor on other peers when leaving canvas
+            if (connections.size > 0) {
+                broadcastCursorHide();
+            }
+        });
+        canvas.addEventListener('mouseenter', (e) => {
+            // Show cursor again when entering
+            if (connections.size > 0) {
+                const coords = getCoordinates(e);
+                broadcastCursor(coords.x, coords.y);
+            }
+        });
         
         // Touch events
         canvas.addEventListener('touchstart', startDrawing, { passive: false });
@@ -1114,6 +1194,11 @@
             if (e.key === 'Enter') {
                 document.getElementById('connectBtn').click();
             }
+        });
+        
+        // Input validation - only allow alphanumeric
+        roomCodeInput.addEventListener('input', (e) => {
+            e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
         });
         
         // Copy room code
