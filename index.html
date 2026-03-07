@@ -586,7 +586,8 @@
             host: '0.peerjs.com',
             port: 443,
             secure: true,
-            debug: 2
+            debug: 1, // Reduced logging (0=disabled, 1=errors, 2=warnings, 3=all)
+            pingInterval: 5000 // Ping signaling server every 5s
         };
 
         const COLORS = ['#58a6ff', '#f85149', '#238636', '#d29922', '#a371f7', '#f0883e', '#c9d1d9', '#0d1117'];
@@ -606,19 +607,40 @@
         
         // Throttling for cursor broadcasts
         let lastCursorBroadcast = 0;
-        const CURSOR_THROTTLE_MS = 100; // Increased from 50ms to 100ms (~10 updates/sec)
+        const CURSOR_THROTTLE_MS = 100;
         let connectionTimeout = null;
         let keepaliveInterval = null;
+        
+        // Connection state tracking for reconnection
+        const pendingReconnects = new Map(); // peerId -> timeoutId
         
         // Start keepalive to maintain connection
         function startKeepalive() {
             if (keepaliveInterval) clearInterval(keepaliveInterval);
             keepaliveInterval = setInterval(() => {
                 if (connections.size > 0) {
-                    // Send lightweight ping to keep connections alive
-                    broadcast({ type: 'ping', timestamp: Date.now() });
+                    // Send lightweight ping and track last seen
+                    connections.forEach((connData, peerId) => {
+                        if (connData.dataConn && connData.dataConn.open) {
+                            try {
+                                connData.dataConn.send({ type: 'ping', timestamp: Date.now() });
+                                connData.lastPingSent = Date.now();
+                            } catch (e) {
+                                console.warn('Failed to send ping to', peerId);
+                            }
+                        }
+                    });
+                    
+                    // Check for dead connections (no ping response in 10 seconds)
+                    const now = Date.now();
+                    connections.forEach((connData, peerId) => {
+                        if (connData.lastPongReceived && now - connData.lastPongReceived > 15000) {
+                            console.warn('Connection to', peerId, 'appears dead, removing');
+                            removePeer(peerId);
+                        }
+                    });
                 }
-            }, 5000); // Ping every 5 seconds
+            }, 3000); // Ping every 3 seconds
         }
         
         function stopKeepalive() {
@@ -626,6 +648,53 @@
                 clearInterval(keepaliveInterval);
                 keepaliveInterval = null;
             }
+        }
+        
+        // Auto-reconnect to a peer
+        function scheduleReconnect(peerId, isHostConnection) {
+            // Clear any existing reconnect for this peer
+            if (pendingReconnects.has(peerId)) {
+                clearTimeout(pendingReconnects.get(peerId));
+            }
+            
+            // Don't reconnect if we're cleaning up or already connected
+            if (!peer || peer.destroyed || connections.has(peerId)) {
+                pendingReconnects.delete(peerId);
+                return;
+            }
+            
+            console.log('Scheduling reconnect to', peerId, 'in 2 seconds...');
+            const timeoutId = setTimeout(() => {
+                pendingReconnects.delete(peerId);
+                
+                if (!peer || peer.destroyed) return;
+                
+                // For clients, try to reconnect to the host
+                if (isHostConnection && roomCode) {
+                    console.log('Attempting to reconnect to host:', roomCode);
+                    try {
+                        const conn = peer.connect(roomCode, {
+                            reliable: true,
+                            serialization: 'json',
+                            metadata: { peerId: peer.id, reconnect: true }
+                        });
+                        
+                        conn.on('open', () => {
+                            console.log('Reconnected to host!');
+                            handleConnection(conn, true);
+                            showToast('Reconnected', 'Connection restored', 'success');
+                        });
+                        
+                        conn.on('error', (err) => {
+                            console.error('Reconnection failed:', err);
+                        });
+                    } catch (e) {
+                        console.error('Failed to initiate reconnect:', e);
+                    }
+                }
+            }, 2000);
+            
+            pendingReconnects.set(peerId, timeoutId);
         }
 
         // ==================== DOM ELEMENTS ====================
@@ -1019,6 +1088,12 @@
         
         function cleanupConnections() {
             stopKeepalive();
+            // Clear all pending reconnects
+            pendingReconnects.forEach((timeoutId, peerId) => {
+                clearTimeout(timeoutId);
+            });
+            pendingReconnects.clear();
+            
             connections.forEach((connData, peerId) => {
                 try {
                     if (connData.dataConn) connData.dataConn.close();
@@ -1133,7 +1208,10 @@
                     if (connections.has(roomCode)) {
                         removePeer(roomCode);
                         updateStatus('', 'Disconnected');
-                        showToast('Disconnected', 'Host closed the connection');
+                        showToast('Disconnected', 'Host closed the connection - attempting reconnect...');
+                        
+                        // Attempt to reconnect to host
+                        scheduleReconnect(roomCode, true);
                     }
                 });
             });
@@ -1217,7 +1295,8 @@
                 conn: conn,
                 dataConn: dataConn,
                 isHostConnection: isHostConnection,
-                connectedAt: Date.now()
+                connectedAt: Date.now(),
+                lastPongReceived: Date.now()
             });
             
             // Set a timeout for connection to be established
@@ -1234,6 +1313,13 @@
                 isConnected = true;
                 clearTimeout(connectionTimer);
                 console.log('Data connection opened with:', peerId);
+                
+                // Update lastPongReceived
+                const connData = connections.get(peerId);
+                if (connData) {
+                    connData.lastPongReceived = Date.now();
+                }
+                
                 updatePeersList();
                 showToast('Peer Connected', `New peer joined`, 'success');
                 
@@ -1241,7 +1327,7 @@
                 if (isHost) {
                     setTimeout(() => {
                         sendCanvasState(dataConn);
-                    }, 500); // Reduced from 1000ms to 500ms
+                    }, 500);
                 }
             }
             
@@ -1263,7 +1349,13 @@
             dataConn.on('close', () => {
                 console.log('Connection closed:', peerId);
                 clearTimeout(connectionTimer);
+                const wasConnected = isConnected;
                 removePeer(peerId);
+                
+                // Schedule reconnect if this was an established connection
+                if (wasConnected && roomCode) {
+                    scheduleReconnect(peerId, isHostConnection);
+                }
             });
             
             dataConn.on('error', (err) => {
@@ -1276,7 +1368,13 @@
             conn.on('close', () => {
                 console.log('Peer connection closed:', peerId);
                 clearTimeout(connectionTimer);
+                const wasConnected = isConnected;
                 removePeer(peerId);
+                
+                // Schedule reconnect if this was an established connection
+                if (wasConnected && roomCode) {
+                    scheduleReconnect(peerId, isHostConnection);
+                }
             });
             
             conn.on('error', (err) => {
@@ -1322,6 +1420,11 @@
                 return;
             }
             
+            const connData = connections.get(peerId);
+            if (connData) {
+                connData.lastPongReceived = Date.now();
+            }
+            
             switch (data.type) {
                 case 'draw':
                     if (data.x1 !== undefined && data.y1 !== undefined && 
@@ -1360,7 +1463,15 @@
                     img.src = data.data;
                     break;
                 case 'ping':
-                    // Keepalive ping, no action needed
+                    // Respond with pong
+                    if (connData && connData.dataConn && connData.dataConn.open) {
+                        try {
+                            connData.dataConn.send({ type: 'pong', timestamp: data.timestamp });
+                        } catch (e) {}
+                    }
+                    break;
+                case 'pong':
+                    // Keepalive response, connection is alive
                     break;
                 default:
                     console.warn('Unknown message type:', data.type);
@@ -1368,6 +1479,12 @@
         }
 
         function removePeer(peerId) {
+            // Clear any pending reconnect for this peer
+            if (pendingReconnects.has(peerId)) {
+                clearTimeout(pendingReconnects.get(peerId));
+                pendingReconnects.delete(peerId);
+            }
+            
             removePeerCursor(peerId);
             const connData = connections.get(peerId);
             if (connData) {
@@ -1391,7 +1508,7 @@
             
             // Only show toast if we had actual connections before
             if (connData) {
-                showToast('Peer Disconnected', 'A peer left the room');
+                showToast('Peer Disconnected', 'Attempting to reconnect...');
             }
         }
 
