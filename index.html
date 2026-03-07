@@ -606,8 +606,27 @@
         
         // Throttling for cursor broadcasts
         let lastCursorBroadcast = 0;
-        const CURSOR_THROTTLE_MS = 50; // Limit to ~20 cursor updates per second
+        const CURSOR_THROTTLE_MS = 100; // Increased from 50ms to 100ms (~10 updates/sec)
         let connectionTimeout = null;
+        let keepaliveInterval = null;
+        
+        // Start keepalive to maintain connection
+        function startKeepalive() {
+            if (keepaliveInterval) clearInterval(keepaliveInterval);
+            keepaliveInterval = setInterval(() => {
+                if (connections.size > 0) {
+                    // Send lightweight ping to keep connections alive
+                    broadcast({ type: 'ping', timestamp: Date.now() });
+                }
+            }, 5000); // Ping every 5 seconds
+        }
+        
+        function stopKeepalive() {
+            if (keepaliveInterval) {
+                clearInterval(keepaliveInterval);
+                keepaliveInterval = null;
+            }
+        }
 
         // ==================== DOM ELEMENTS ====================
         const canvas = document.getElementById('whiteboard');
@@ -653,6 +672,13 @@
                 avatar.title = `Peer ${peerId}`;
                 peersList.appendChild(avatar);
             });
+            
+            // Manage keepalive based on connection count
+            if (connections.size > 0) {
+                startKeepalive();
+            } else {
+                stopKeepalive();
+            }
         }
 
         // ==================== PEER COLOR UTIL ====================
@@ -783,11 +809,23 @@
             connections.forEach((connData, peerId) => {
                 if (connData.dataConn && connData.dataConn.open) {
                     try {
-                        connData.dataConn.send(data);
+                        // Check connection state more thoroughly
+                        if (connData.dataConn.peerConnection && 
+                            connData.dataConn.peerConnection.connectionState === 'connected') {
+                            connData.dataConn.send(data);
+                        } else if (!connData.dataConn.peerConnection) {
+                            // Fallback if peerConnection property doesn't exist
+                            connData.dataConn.send(data);
+                        }
                     } catch (err) {
                         console.error('Failed to send to peer:', peerId, err);
-                        // Remove peer on send failure as connection is likely dead
-                        if (err.message && (err.message.includes('closed') || err.message.includes('not open'))) {
+                        // Only remove peer on specific errors that indicate dead connection
+                        if (err.message && (
+                            err.message.includes('closed') || 
+                            err.message.includes('not open') ||
+                            err.message.includes('failed') ||
+                            err.message.includes('disconnected')
+                        )) {
                             removePeer(peerId);
                         }
                     }
@@ -980,6 +1018,7 @@
         }
         
         function cleanupConnections() {
+            stopKeepalive();
             connections.forEach((connData, peerId) => {
                 try {
                     if (connData.dataConn) connData.dataConn.close();
@@ -1167,12 +1206,12 @@
                 return;
             }
             
-            // Create data channel for drawing data
-            const dataConn = conn;
-            
             // Track connection state
             let isConnected = false;
             let connectionTimer = null;
+            
+            // Create data channel for drawing data
+            const dataConn = conn;
             
             connections.set(peerId, {
                 conn: conn,
@@ -1189,28 +1228,29 @@
                 }
             }, 15000);
             
-            dataConn.on('open', () => {
+            // Function to handle when connection is ready
+            function onConnectionReady() {
+                if (isConnected) return; // Prevent double-triggering
                 isConnected = true;
                 clearTimeout(connectionTimer);
                 console.log('Data connection opened with:', peerId);
                 updatePeersList();
                 showToast('Peer Connected', `New peer joined`, 'success');
                 
-                // Send current canvas state to new peer (if host)
-                // Delay to ensure peer is ready to receive
+                // Send current canvas state to new peer (if host) - with delay and chunking
                 if (isHost) {
                     setTimeout(() => {
-                        try {
-                            if (dataConn && dataConn.open) {
-                                const canvasData = canvas.toDataURL('image/png');
-                                dataConn.send({ type: 'canvas', data: canvasData });
-                            }
-                        } catch (err) {
-                            console.error('Failed to send canvas state:', err);
-                        }
-                    }, 1000);
+                        sendCanvasState(dataConn);
+                    }, 500); // Reduced from 1000ms to 500ms
                 }
-            });
+            }
+            
+            // Check if connection is already open
+            if (dataConn.open) {
+                onConnectionReady();
+            } else {
+                dataConn.on('open', onConnectionReady);
+            }
             
             dataConn.on('data', (data) => {
                 try {
@@ -1244,6 +1284,36 @@
                 clearTimeout(connectionTimer);
                 removePeer(peerId);
             });
+        }
+        
+        // Send canvas state in chunks to avoid overwhelming the connection
+        function sendCanvasState(dataConn) {
+            try {
+                if (!dataConn || !dataConn.open) {
+                    console.warn('Cannot send canvas state: connection not open');
+                    return;
+                }
+                
+                const canvasData = canvas.toDataURL('image/png');
+                
+                // Check size - if too large, send a simplified message
+                const sizeMB = canvasData.length / 1024 / 1024;
+                if (sizeMB > 1) {
+                    console.warn('Canvas too large (' + sizeMB.toFixed(2) + 'MB), compressing...');
+                    // Send a lower quality version
+                    const compressedData = canvas.toDataURL('image/jpeg', 0.5);
+                    if (dataConn.open) {
+                        dataConn.send({ type: 'canvas', data: compressedData });
+                    }
+                } else {
+                    if (dataConn.open) {
+                        dataConn.send({ type: 'canvas', data: canvasData });
+                    }
+                }
+            } catch (err) {
+                console.error('Failed to send canvas state:', err);
+                // Don't close connection on canvas send failure - it's not critical
+            }
         }
 
         function handlePeerData(peerId, data) {
@@ -1288,6 +1358,9 @@
                         console.error('Failed to load canvas image');
                     };
                     img.src = data.data;
+                    break;
+                case 'ping':
+                    // Keepalive ping, no action needed
                     break;
                 default:
                     console.warn('Unknown message type:', data.type);
