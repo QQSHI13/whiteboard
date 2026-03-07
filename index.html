@@ -786,7 +786,10 @@
                         connData.dataConn.send(data);
                     } catch (err) {
                         console.error('Failed to send to peer:', peerId, err);
-                        // Don't remove peer immediately, let the connection error handler deal with it
+                        // Remove peer on send failure as connection is likely dead
+                        if (err.message && (err.message.includes('closed') || err.message.includes('not open'))) {
+                            removePeer(peerId);
+                        }
                     }
                 }
             });
@@ -860,36 +863,52 @@
         }
 
         // ==================== WEBRTC / PEERJS ====================
+        // Connection retry configuration
+        const CONNECTION_CONFIG = {
+            maxRetries: 3,
+            retryDelay: 1000,
+            connectionTimeout: 15000,
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+        };
+        
+        let connectionRetryCount = 0;
+        let peerOpenTimeout = null;
+        
         function initPeer(code) {
             // Clean up existing peer if any
-            if (peer) {
-                peer.destroy();
-                peer = null;
-            }
-            connections.clear();
-            removeAllPeerCursors();
+            cleanupPeer();
             
             roomCode = code;
             roomCodeDisplay.textContent = roomCode;
             
             updateStatus('connecting', 'Connecting...');
             
-            peer = new Peer(roomCode, PEER_CONFIG);
+            // Create peer with additional ICE servers for better connectivity
+            const peerConfig = {
+                ...PEER_CONFIG,
+                config: { iceServers: CONNECTION_CONFIG.iceServers }
+            };
+            
+            peer = new Peer(roomCode, peerConfig);
             
             // Handle peer open failure
-            const peerOpenTimeout = setTimeout(() => {
+            peerOpenTimeout = setTimeout(() => {
                 if (!peer || !peer.open) {
                     showToast('Connection Failed', 'Could not connect to signaling server', 'error');
                     updateStatus('', 'Offline');
-                    if (peer) {
-                        peer.destroy();
-                        peer = null;
-                    }
+                    cleanupPeer();
+                    // Show modal again so user can retry
+                    joinModal.classList.remove('hidden');
                 }
-            }, 15000);
+            }, CONNECTION_CONFIG.connectionTimeout);
             
             peer.on('open', (id) => {
                 clearTimeout(peerOpenTimeout);
+                peerOpenTimeout = null;
+                connectionRetryCount = 0;
                 console.log('Peer opened with ID:', id);
                 updateStatus('connected', 'Connected');
                 isHost = true;
@@ -899,30 +918,82 @@
             
             peer.on('connection', (conn) => {
                 console.log('Incoming connection from:', conn.peer);
+                // Prevent self-connections
+                if (conn.peer === peer.id) {
+                    console.warn('Rejecting self-connection');
+                    conn.close();
+                    return;
+                }
                 handleConnection(conn, false);
+            });
+            
+            peer.on('disconnected', () => {
+                console.warn('Peer disconnected from signaling server');
+                updateStatus('connecting', 'Reconnecting...');
+                // Attempt to reconnect
+                if (peer && !peer.destroyed) {
+                    peer.reconnect();
+                }
+            });
+            
+            peer.on('close', () => {
+                console.log('Peer connection closed');
+                updateStatus('', 'Offline');
+                cleanupConnections();
             });
             
             peer.on('error', (err) => {
                 console.error('Peer error:', err);
+                clearTimeout(peerOpenTimeout);
+                peerOpenTimeout = null;
+                
                 if (err.type === 'unavailable-id') {
                     // Room code exists, generate a new one instead of joining
                     showToast('Code Taken', 'Generating new room code...', 'info');
-                    const newCode = generateRoomCode();
-                    // Clean up failed peer
-                    peer.destroy();
+                    cleanupPeer();
                     // Try again with new code
-                    setTimeout(() => initPeer(newCode), 500);
+                    setTimeout(() => initPeer(generateRoomCode()), 500);
+                } else if (err.type === 'network' || err.type === 'disconnected') {
+                    updateStatus('', 'Offline');
+                    showToast('Network Error', 'Connection lost. Please try again.', 'error');
+                    joinModal.classList.remove('hidden');
                 } else {
                     updateStatus('', 'Error');
                     showToast('Connection Error', err.message, 'error');
                 }
             });
         }
+        
+        function cleanupPeer() {
+            clearTimeout(peerOpenTimeout);
+            peerOpenTimeout = null;
+            if (peer) {
+                try {
+                    peer.destroy();
+                } catch (e) {
+                    console.warn('Error destroying peer:', e);
+                }
+                peer = null;
+            }
+            cleanupConnections();
+            isHost = false;
+        }
+        
+        function cleanupConnections() {
+            connections.forEach((connData, peerId) => {
+                try {
+                    if (connData.dataConn) connData.dataConn.close();
+                    if (connData.conn) connData.conn.close();
+                } catch (e) {
+                    console.warn('Error closing connection:', e);
+                }
+            });
+            connections.clear();
+            removeAllPeerCursors();
+            updatePeersList();
+        }
 
         function joinRoom(code) {
-            // Hide modal immediately when connect is clicked
-            joinModal.classList.add('hidden');
-            
             // Clear any existing connection timeout
             if (connectionTimeout) {
                 clearTimeout(connectionTimeout);
@@ -930,54 +1001,70 @@
             }
             
             // Clean up existing peer if any
-            if (peer) {
-                peer.destroy();
-                peer = null;
-            }
-            connections.clear();
-            removeAllPeerCursors();
+            cleanupPeer();
             
             roomCode = code;
             roomCodeDisplay.textContent = roomCode;
             
             updateStatus('connecting', 'Connecting...');
             
+            // Create peer with additional ICE servers for better connectivity
+            const peerConfig = {
+                ...PEER_CONFIG,
+                config: { iceServers: CONNECTION_CONFIG.iceServers }
+            };
+            
             // Use a shorter, valid peer ID
             const myId = 'u' + Date.now().toString(36) + Math.random().toString(36).substring(2, 4);
-            peer = new Peer(myId, PEER_CONFIG);
+            peer = new Peer(myId, peerConfig);
             
             // Handle peer open failure (set a timeout)
-            const peerOpenTimeout = setTimeout(() => {
+            peerOpenTimeout = setTimeout(() => {
                 if (!peer || !peer.open) {
                     showToast('Connection Failed', 'Could not connect to signaling server', 'error');
                     updateStatus('', 'Offline');
-                    if (peer) {
-                        peer.destroy();
-                        peer = null;
-                    }
+                    cleanupPeer();
+                    joinModal.classList.remove('hidden');
                 }
-            }, 15000); // 15 second timeout for peer to open
+            }, CONNECTION_CONFIG.connectionTimeout);
             
             peer.on('open', () => {
                 clearTimeout(peerOpenTimeout);
+                peerOpenTimeout = null;
                 console.log('Joining room:', roomCode);
+                
+                // Validate peer is still valid before connecting
+                if (!peer || peer.destroyed) {
+                    showToast('Connection Error', 'Peer connection was destroyed', 'error');
+                    updateStatus('', 'Offline');
+                    joinModal.classList.remove('hidden');
+                    return;
+                }
+                
                 const conn = peer.connect(roomCode, {
                     reliable: true,
-                    serialization: 'json'
+                    serialization: 'json',
+                    metadata: { peerId: myId }
                 });
+                
+                // Track connection state
+                let connectionAttempted = false;
                 
                 // Set connection timeout
                 connectionTimeout = setTimeout(() => {
-                    if (!conn.open) {
+                    if (!conn.open && !connectionAttempted) {
                         showToast('Connection Timeout', 'Room not found or host offline', 'error');
                         updateStatus('', 'Offline');
-                        conn.close();
-                        peer.destroy();
-                        peer = null;
+                        try {
+                            conn.close();
+                        } catch (e) {}
+                        cleanupPeer();
+                        joinModal.classList.remove('hidden');
                     }
                 }, 10000); // 10 second timeout
                 
                 conn.on('open', () => {
+                    connectionAttempted = true;
                     // Clear timeout on successful connection
                     if (connectionTimeout) {
                         clearTimeout(connectionTimeout);
@@ -992,10 +1079,22 @@
                 
                 conn.on('error', (err) => {
                     console.error('Connection error:', err);
-                    showToast('Connection Error', 'Failed to join room', 'error');
+                    connectionAttempted = true;
+                    showToast('Connection Error', 'Failed to join room: ' + err.message, 'error');
                     if (connectionTimeout) {
                         clearTimeout(connectionTimeout);
                         connectionTimeout = null;
+                    }
+                    cleanupPeer();
+                    joinModal.classList.remove('hidden');
+                });
+                
+                conn.on('close', () => {
+                    console.log('Connection to host closed');
+                    if (connections.has(roomCode)) {
+                        removePeer(roomCode);
+                        updateStatus('', 'Disconnected');
+                        showToast('Disconnected', 'Host closed the connection');
                     }
                 });
             });
@@ -1011,14 +1110,39 @@
                 handleConnection(conn, false);
             });
             
+            peer.on('disconnected', () => {
+                console.warn('Peer disconnected from signaling server');
+                updateStatus('connecting', 'Reconnecting...');
+                if (peer && !peer.destroyed) {
+                    peer.reconnect();
+                }
+            });
+            
+            peer.on('close', () => {
+                console.log('Peer connection closed');
+                updateStatus('', 'Offline');
+                cleanupConnections();
+            });
+            
             peer.on('error', (err) => {
                 console.error('Peer error:', err);
-                updateStatus('', 'Error');
-                showToast('Connection Error', err.message, 'error');
+                clearTimeout(peerOpenTimeout);
+                peerOpenTimeout = null;
                 if (connectionTimeout) {
                     clearTimeout(connectionTimeout);
                     connectionTimeout = null;
                 }
+                updateStatus('', 'Error');
+                
+                if (err.type === 'peer-unavailable') {
+                    showToast('Room Not Found', 'The room code does not exist', 'error');
+                } else if (err.type === 'network' || err.type === 'disconnected') {
+                    showToast('Network Error', 'Connection lost. Please try again.', 'error');
+                } else {
+                    showToast('Connection Error', err.message, 'error');
+                }
+                cleanupPeer();
+                joinModal.classList.remove('hidden');
             });
         }
 
@@ -1028,56 +1152,113 @@
             // Prevent duplicate connections
             if (connections.has(peerId)) {
                 console.log('Already connected to peer:', peerId);
-                conn.close();
+                try {
+                    conn.close();
+                } catch (e) {}
+                return;
+            }
+            
+            // Prevent self-connections
+            if (peer && peer.id === peerId) {
+                console.warn('Rejecting self-connection');
+                try {
+                    conn.close();
+                } catch (e) {}
                 return;
             }
             
             // Create data channel for drawing data
             const dataConn = conn;
             
+            // Track connection state
+            let isConnected = false;
+            let connectionTimer = null;
+            
             connections.set(peerId, {
                 conn: conn,
                 dataConn: dataConn,
-                isHostConnection: isHostConnection
+                isHostConnection: isHostConnection,
+                connectedAt: Date.now()
+            });
+            
+            // Set a timeout for connection to be established
+            connectionTimer = setTimeout(() => {
+                if (!isConnected) {
+                    console.warn('Connection timeout for peer:', peerId);
+                    removePeer(peerId);
+                }
+            }, 15000);
+            
+            dataConn.on('open', () => {
+                isConnected = true;
+                clearTimeout(connectionTimer);
+                console.log('Data connection opened with:', peerId);
+                updatePeersList();
+                showToast('Peer Connected', `New peer joined`, 'success');
+                
+                // Send current canvas state to new peer (if host)
+                // Delay to ensure peer is ready to receive
+                if (isHost) {
+                    setTimeout(() => {
+                        try {
+                            if (dataConn && dataConn.open) {
+                                const canvasData = canvas.toDataURL('image/png');
+                                dataConn.send({ type: 'canvas', data: canvasData });
+                            }
+                        } catch (err) {
+                            console.error('Failed to send canvas state:', err);
+                        }
+                    }, 1000);
+                }
             });
             
             dataConn.on('data', (data) => {
-                handlePeerData(peerId, data);
+                try {
+                    handlePeerData(peerId, data);
+                } catch (err) {
+                    console.error('Error handling peer data:', err);
+                }
             });
             
             dataConn.on('close', () => {
                 console.log('Connection closed:', peerId);
+                clearTimeout(connectionTimer);
                 removePeer(peerId);
             });
             
             dataConn.on('error', (err) => {
                 console.error('Connection error:', err);
+                clearTimeout(connectionTimer);
                 removePeer(peerId);
             });
             
-            updatePeersList();
-            showToast('Peer Connected', `New peer joined`, 'success');
+            // Also monitor the peer connection state
+            conn.on('close', () => {
+                console.log('Peer connection closed:', peerId);
+                clearTimeout(connectionTimer);
+                removePeer(peerId);
+            });
             
-            // Send current canvas state to new peer (if host)
-            // Delay to ensure peer is ready to receive
-            if (isHost) {
-                setTimeout(() => {
-                    try {
-                        if (dataConn && dataConn.open) {
-                            const canvasData = canvas.toDataURL('image/png');
-                            dataConn.send({ type: 'canvas', data: canvasData });
-                        }
-                    } catch (err) {
-                        console.error('Failed to send canvas state:', err);
-                    }
-                }, 1000); // Increased delay for better reliability
-            }
+            conn.on('error', (err) => {
+                console.error('Peer connection error:', err);
+                clearTimeout(connectionTimer);
+                removePeer(peerId);
+            });
         }
 
         function handlePeerData(peerId, data) {
+            if (!data || typeof data !== 'object') {
+                console.warn('Received invalid data from peer:', peerId);
+                return;
+            }
+            
             switch (data.type) {
                 case 'draw':
-                    draw(data.x1, data.y1, data.x2, data.y2, data.color, data.size);
+                    if (data.x1 !== undefined && data.y1 !== undefined && 
+                        data.x2 !== undefined && data.y2 !== undefined &&
+                        data.color && data.size !== undefined) {
+                        draw(data.x1, data.y1, data.x2, data.y2, data.color, data.size);
+                    }
                     break;
                 case 'clear':
                     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1091,8 +1272,8 @@
                     break;
                 case 'canvas':
                     // Received full canvas state
-                    if (!data.data) {
-                        console.error('Received empty canvas data');
+                    if (!data.data || typeof data.data !== 'string') {
+                        console.error('Received empty or invalid canvas data');
                         break;
                     }
                     const img = new Image();
@@ -1108,6 +1289,8 @@
                     };
                     img.src = data.data;
                     break;
+                default:
+                    console.warn('Unknown message type:', data.type);
             }
         }
 
@@ -1115,21 +1298,34 @@
             removePeerCursor(peerId);
             const connData = connections.get(peerId);
             if (connData) {
-                if (connData.dataConn) connData.dataConn.close();
-                if (connData.conn) connData.conn.close();
+                try {
+                    if (connData.dataConn && connData.dataConn.open) {
+                        connData.dataConn.close();
+                    }
+                } catch (e) {
+                    console.warn('Error closing data connection:', e);
+                }
+                try {
+                    if (connData.conn && connData.conn.open) {
+                        connData.conn.close();
+                    }
+                } catch (e) {
+                    console.warn('Error closing peer connection:', e);
+                }
             }
             connections.delete(peerId);
             updatePeersList();
-            showToast('Peer Disconnected', 'A peer left the room');
+            
+            // Only show toast if we had actual connections before
+            if (connData) {
+                showToast('Peer Disconnected', 'A peer left the room');
+            }
         }
 
         // ==================== CLEANUP ON PAGE UNLOAD ====================
         window.addEventListener('beforeunload', () => {
-            connections.forEach((connData, peerId) => {
-                if (connData.dataConn) connData.dataConn.close();
-                if (connData.conn) connData.conn.close();
-            });
-            if (peer) peer.destroy();
+            cleanupConnections();
+            cleanupPeer();
         });
 
         // ==================== EVENT LISTENERS ====================
