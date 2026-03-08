@@ -608,11 +608,18 @@
     <script>
         // ==================== CONFIGURATION ====================
         const PEER_CONFIG = {
-            host: '0.peerjs.com',
+            host: 'peerjs.metered.ca',
             port: 443,
             secure: true,
-            debug: 1, // Reduced logging (0=disabled, 1=errors, 2=warnings, 3=all)
-            pingInterval: 5000 // Ping signaling server every 5s
+            debug: 1,
+            pingInterval: 5000,
+            config: {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' },
+                    { urls: 'stun:stun2.l.google.com:19302' }
+                ]
+            }
         };
 
         const COLORS = ['#58a6ff', '#f85149', '#238636', '#d29922', '#a371f7', '#f0883e', '#c9d1d9', '#0d1117'];
