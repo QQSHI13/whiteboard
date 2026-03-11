@@ -751,20 +751,37 @@
 
     <script>
         // ==================== CONFIGURATION ====================
-        const PEER_CONFIG = {
-            host: 'peerjs.metered.ca',
-            port: 443,
-            secure: true,
-            debug: 1,
-            pingInterval: 5000,
-            config: {
-                iceServers: [
-                    { urls: 'stun:stun.l.google.com:19302' },
-                    { urls: 'stun:stun1.l.google.com:19302' },
-                    { urls: 'stun:stun2.l.google.com:19302' }
-                ]
-            }
-        };
+        // Multiple PeerJS servers for failover
+        const PEER_SERVERS = [
+            { host: '0.peerjs.com', port: 443, secure: true },
+            { host: 'peerjs.metered.ca', port: 443, secure: true },
+            { host: 'peerjs.herokuapp.com', port: 443, secure: true }
+        ];
+        
+        let currentServerIndex = 0;
+        let reconnectAttempts = 0;
+        const MAX_RECONNECT_ATTEMPTS = 5;
+        const RECONNECT_DELAY = 3000;
+        
+        function getPeerConfig() {
+            const server = PEER_SERVERS[currentServerIndex];
+            return {
+                host: server.host,
+                port: server.port,
+                secure: server.secure,
+                debug: 1,
+                pingInterval: 5000,
+                config: {
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' },
+                        { urls: 'stun:stun2.l.google.com:19302' },
+                        { urls: 'stun:stun3.l.google.com:19302' },
+                        { urls: 'stun:stun4.l.google.com:19302' }
+                    ]
+                }
+            };
+        }
 
         // Storage and rendering limits
         const MAX_STROKES = 10000;
@@ -1530,13 +1547,8 @@
 
             updateStatus('connecting', 'Connecting...');
 
-            // Create peer with additional ICE servers for better connectivity
-            const peerConfig = {
-                ...PEER_CONFIG,
-                config: { iceServers: CONNECTION_CONFIG.iceServers }
-            };
-
-            peer = new Peer(roomCode, peerConfig);
+            // Create peer with current server config
+            peer = new Peer(roomCode, getPeerConfig());
 
             // Handle peer open failure
             peerOpenTimeout = setTimeout(() => {
@@ -1599,10 +1611,22 @@
                     cleanupPeer();
                     // Try again with new code
                     setTimeout(() => initPeer(generateRoomCode()), 500);
-                } else if (err.type === 'network' || err.type === 'disconnected') {
-                    updateStatus('', 'Offline');
-                    showToast('Network Error', 'Connection lost. Please try again.', 'error');
-                    joinModal.classList.remove('hidden');
+                } else if (err.type === 'network' || err.type === 'disconnected' || err.type === 'server-error') {
+                    // Try next server
+                    reconnectAttempts++;
+                    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                        currentServerIndex = (currentServerIndex + 1) % PEER_SERVERS.length;
+                        const nextServer = PEER_SERVERS[currentServerIndex];
+                        console.log(`Trying next server: ${nextServer.host}`);
+                        showToast('Server Unavailable', `Trying ${nextServer.host}...`, 'warning');
+                        cleanupPeer();
+                        setTimeout(() => initPeer(roomCode), RECONNECT_DELAY);
+                    } else {
+                        reconnectAttempts = 0;
+                        updateStatus('', 'Offline');
+                        showToast('Network Error', 'All servers unavailable. Please try again later.', 'error');
+                        joinModal.classList.remove('hidden');
+                    }
                 } else {
                     updateStatus('', 'Error');
                     showToast('Connection Error', err.message, 'error');
@@ -1665,15 +1689,9 @@
 
             updateStatus('connecting', 'Connecting...');
 
-            // Create peer with additional ICE servers for better connectivity
-            const peerConfig = {
-                ...PEER_CONFIG,
-                config: { iceServers: CONNECTION_CONFIG.iceServers }
-            };
-
             // Use a shorter, valid peer ID
             const myId = 'u' + Date.now().toString(36) + Math.random().toString(36).substring(2, 4);
-            peer = new Peer(myId, peerConfig);
+            peer = new Peer(myId, getPeerConfig());
 
             // Handle peer open failure (set a timeout)
             peerOpenTimeout = setTimeout(() => {
@@ -1794,16 +1812,35 @@
                     clearTimeout(connectionTimeout);
                     connectionTimeout = null;
                 }
-                updateStatus('', 'Error');
 
                 if (err.type === 'peer-unavailable') {
                     showToast('Room Not Found', 'The room code does not exist', 'error');
-                } else if (err.type === 'network' || err.type === 'disconnected') {
-                    showToast('Network Error', 'Connection lost. Please try again.', 'error');
+                    updateStatus('', 'Error');
+                    cleanupPeer();
+                    joinModal.classList.remove('hidden');
+                } else if (err.type === 'network' || err.type === 'disconnected' || err.type === 'server-error') {
+                    // Try next server
+                    reconnectAttempts++;
+                    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                        currentServerIndex = (currentServerIndex + 1) % PEER_SERVERS.length;
+                        const nextServer = PEER_SERVERS[currentServerIndex];
+                        console.log(`Trying next server: ${nextServer.host}`);
+                        showToast('Server Unavailable', `Trying ${nextServer.host}...`, 'warning');
+                        cleanupPeer();
+                        setTimeout(() => joinRoom(roomCode), RECONNECT_DELAY);
+                    } else {
+                        reconnectAttempts = 0;
+                        updateStatus('', 'Offline');
+                        showToast('Network Error', 'All servers unavailable. Please try again later.', 'error');
+                        cleanupPeer();
+                        joinModal.classList.remove('hidden');
+                    }
                 } else {
+                    updateStatus('', 'Error');
                     showToast('Connection Error', err.message, 'error');
+                    cleanupPeer();
+                    joinModal.classList.remove('hidden');
                 }
-                cleanupPeer();
                 joinModal.classList.remove('hidden');
             });
         }
