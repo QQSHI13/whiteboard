@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#0d1117">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://unpkg.com 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://* https://*; img-src 'self' data: blob:;">
     <link rel="manifest" href="manifest.json">
     <title>CollaBoard - Real-time Collaborative Whiteboard</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect x='10' y='10' width='80' height='80' rx='10' fill='%2358a6ff'/%3E%3Crect x='25' y='25' width='20' height='20' rx='3' fill='white'/%3E%3Crect x='55' y='25' width='20' height='20' rx='3' fill='white'/%3E%3Crect x='25' y='55' width='20' height='20' rx='3' fill='white'/%3E%3Crect x='55' y='55' width='20' height='20' rx='3' fill='white'/%3E%3C/svg%3E">
@@ -275,9 +276,21 @@
             color: #fff;
         }
 
+        .action-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
         .action-btn svg {
             width: 20px;
             height: 20px;
+        }
+
+        .zoom-level {
+            font-size: 11px;
+            color: #8b949e;
+            text-align: center;
+            margin-top: 4px;
         }
 
         /* Canvas Container */
@@ -475,6 +488,31 @@
             color: #0d1117;
             border: 2px solid #0d1117;
         }
+
+        /* Keyboard Shortcuts Modal */
+        .shortcuts-list {
+            text-align: left;
+            margin: 20px 0;
+        }
+
+        .shortcut-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #30363d;
+        }
+
+        .shortcut-item:last-child {
+            border-bottom: none;
+        }
+
+        .shortcut-keys {
+            font-family: monospace;
+            background: #0d1117;
+            padding: 2px 8px;
+            border-radius: 4px;
+            border: 1px solid #30363d;
+        }
     </style>
 </head>
 <body>
@@ -505,6 +543,7 @@
                 </svg>
             </button>
             <button class="btn btn-primary" id="joinRoomBtn">Join Room</button>
+            <button class="btn btn-danger hidden" id="leaveRoomBtn">Leave Room</button>
         </div>
     </header>
 
@@ -549,6 +588,52 @@
             <div class="divider"></div>
 
             <div class="tool-section">
+                <span class="tool-section-title">History</span>
+                <button class="action-btn" id="undoBtn" title="Undo (Ctrl+Z)" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 7v6h6"/>
+                        <path d="M21 17a9 9 0 00-9-9 9 9 0 00-6 2.3L3 13"/>
+                    </svg>
+                </button>
+                <button class="action-btn" id="redoBtn" title="Redo (Ctrl+Y or Ctrl+Shift+Z)" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 7v6h-6"/>
+                        <path d="M3 17a9 9 0 019-9 9 9 0 016 2.3L21 13"/>
+                    </svg>
+                </button>
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="tool-section">
+                <span class="tool-section-title">Zoom</span>
+                <button class="action-btn" id="zoomInBtn" title="Zoom In (+)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"/>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                        <line x1="11" y1="8" x2="11" y2="14"/>
+                        <line x1="8" y1="11" x2="14" y2="11"/>
+                    </svg>
+                </button>
+                <button class="action-btn" id="zoomOutBtn" title="Zoom Out (-)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"/>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                        <line x1="8" y1="11" x2="14" y2="11"/>
+                    </svg>
+                </button>
+                <div class="zoom-level" id="zoomLevel">100%</div>
+                <button class="action-btn" id="resetZoomBtn" title="Reset Zoom (1:1)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <circle cx="12" cy="12" r="3"/>
+                    </svg>
+                </button>
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="tool-section">
                 <span class="tool-section-title">View</span>
                 <button class="action-btn" id="panBtn" title="Pan canvas (Space+drag or middle mouse)">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -558,7 +643,7 @@
                 <button class="action-btn" id="resetViewBtn" title="Reset view">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <circle cx="12" cy="12" r="10"/>
-                        <point cx="12" cy="12" r="3"/>
+                        <circle cx="12" cy="12" r="3"/>
                     </svg>
                 </button>
             </div>
@@ -578,6 +663,13 @@
                         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
                         <polyline points="7 10 12 15 17 10"/>
                         <line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
+                </button>
+                <button class="action-btn" id="helpBtn" title="Keyboard Shortcuts (?)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+                        <line x1="12" y1="17" x2="12.01" y2="17"/>
                     </svg>
                 </button>
             </div>
@@ -602,6 +694,58 @@
         </div>
     </div>
 
+    <!-- Keyboard Shortcuts Modal -->
+    <div class="modal-overlay hidden" id="shortcutsModal">
+        <div class="modal">
+            <h2 class="modal-title">Keyboard Shortcuts</h2>
+            <div class="shortcuts-list">
+                <div class="shortcut-item">
+                    <span>Undo</span>
+                    <span class="shortcut-keys">Ctrl+Z</span>
+                </div>
+                <div class="shortcut-item">
+                    <span>Redo</span>
+                    <span class="shortcut-keys">Ctrl+Y / Ctrl+Shift+Z</span>
+                </div>
+                <div class="shortcut-item">
+                    <span>Pan Mode</span>
+                    <span class="shortcut-keys">Space + Drag</span>
+                </div>
+                <div class="shortcut-item">
+                    <span>Zoom In</span>
+                    <span class="shortcut-keys">Ctrl++ / +</span>
+                </div>
+                <div class="shortcut-item">
+                    <span>Zoom Out</span>
+                    <span class="shortcut-keys">Ctrl+- / -</span>
+                </div>
+                <div class="shortcut-item">
+                    <span>Reset View</span>
+                    <span class="shortcut-keys">Ctrl+0</span>
+                </div>
+                <div class="shortcut-item">
+                    <span>Clear Canvas</span>
+                    <span class="shortcut-keys">Ctrl+Shift+C</span>
+                </div>
+                <div class="shortcut-item">
+                    <span>Download</span>
+                    <span class="shortcut-keys">Ctrl+S</span>
+                </div>
+                <div class="shortcut-item">
+                    <span>Leave Room</span>
+                    <span class="shortcut-keys">Esc</span>
+                </div>
+                <div class="shortcut-item">
+                    <span>Help</span>
+                    <span class="shortcut-keys">?</span>
+                </div>
+            </div>
+            <div class="modal-buttons">
+                <button class="btn btn-primary" id="closeShortcutsBtn">Close</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast Container -->
     <div class="toast-container" id="toastContainer"></div>
 
@@ -622,6 +766,11 @@
             }
         };
 
+        // Storage and rendering limits
+        const MAX_STROKES = 10000;
+        const STROKE_PRUNE_BATCH = 1000;
+        const STORAGE_KEY = 'collaboard_canvas_v1';
+
         const COLORS = ['#58a6ff', '#f85149', '#238636', '#d29922', '#a371f7', '#f0883e', '#c9d1d9', '#0d1117'];
         const CURSOR_COLORS = ['#58a6ff', '#f85149', '#238636', '#d29922', '#a371f7', '#f0883e', '#3fb950', '#79c0ff'];
 
@@ -639,8 +788,11 @@
 
         // Infinite canvas state
         let strokes = []; // All strokes stored for infinite canvas
+        let undoStack = []; // For undo functionality
+        let redoStack = []; // For redo functionality
         let viewOffsetX = 0;
         let viewOffsetY = 0;
+        let zoomLevel = 1.0; // Zoom scale
         let isPanning = false;
         let panStartX = 0;
         let panStartY = 0;
@@ -652,8 +804,81 @@
         let connectionTimeout = null;
         let keepaliveInterval = null;
 
+        // Debouncing for resize
+        let resizeTimeout = null;
+
         // Connection state tracking for reconnection
         const pendingReconnects = new Map(); // peerId -> timeoutId
+
+        // ==================== SECURITY: INPUT SANITIZATION ====================
+        function sanitizeHtml(text) {
+            if (typeof text !== 'string') return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function sanitizeCanvasDataUrl(dataUrl) {
+            if (typeof dataUrl !== 'string') return null;
+            // Only allow valid data URLs with image MIME types
+            const allowedPattern = /^data:image\/(png|jpeg|jpg|gif|webp);base64,/;
+            if (!allowedPattern.test(dataUrl)) {
+                console.warn('Invalid or unsafe canvas data URL rejected');
+                return null;
+            }
+            // Limit size check (rough estimate)
+            const base64Part = dataUrl.split(',')[1];
+            if (base64Part && base64Part.length > 10 * 1024 * 1024) { // 10MB limit
+                console.warn('Canvas data URL too large, rejected');
+                return null;
+            }
+            return dataUrl;
+        }
+
+        function sanitizePeerId(id) {
+            if (typeof id !== 'string') return 'unknown';
+            // Only allow alphanumeric and limited special chars
+            return id.replace(/[^a-zA-Z0-9_-]/g, '').substring(0, 50);
+        }
+
+        // ==================== STORAGE: LOCAL PERSISTENCE ====================
+        function saveCanvasToStorage() {
+            try {
+                const data = {
+                    strokes: strokes.slice(-MAX_STROKES), // Only save last N strokes
+                    timestamp: Date.now(),
+                    version: 1
+                };
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+            } catch (e) {
+                console.warn('Failed to save canvas to localStorage:', e);
+            }
+        }
+
+        function loadCanvasFromStorage() {
+            try {
+                const saved = localStorage.getItem(STORAGE_KEY);
+                if (saved) {
+                    const data = JSON.parse(saved);
+                    if (data.strokes && Array.isArray(data.strokes)) {
+                        strokes = data.strokes.slice(-MAX_STROKES);
+                        redrawCanvas();
+                        return true;
+                    }
+                }
+            } catch (e) {
+                console.warn('Failed to load canvas from localStorage:', e);
+            }
+            return false;
+        }
+
+        function clearCanvasStorage() {
+            try {
+                localStorage.removeItem(STORAGE_KEY);
+            } catch (e) {
+                console.warn('Failed to clear canvas storage:', e);
+            }
+        }
 
         // Start keepalive to maintain connection
         function startKeepalive() {
@@ -743,25 +968,39 @@
         const ctx = canvas.getContext('2d');
         const container = document.getElementById('canvasContainer');
         const joinModal = document.getElementById('joinModal');
+        const shortcutsModal = document.getElementById('shortcutsModal');
         const roomCodeInput = document.getElementById('roomCodeInput');
         const roomCodeDisplay = document.getElementById('roomCodeDisplay');
         const statusDot = document.getElementById('statusDot');
         const statusText = document.getElementById('statusText');
         const peersList = document.getElementById('peersList');
         const toastContainer = document.getElementById('toastContainer');
+        const zoomLevelDisplay = document.getElementById('zoomLevel');
+        const undoBtn = document.getElementById('undoBtn');
+        const redoBtn = document.getElementById('redoBtn');
+        const leaveRoomBtn = document.getElementById('leaveRoomBtn');
+        const joinRoomBtn = document.getElementById('joinRoomBtn');
 
         // ==================== UTILITY FUNCTIONS ====================
         function generateRoomCode() {
             return Math.random().toString(36).substring(2, 8).toUpperCase();
         }
 
+        // SECURITY FIX: Use textContent instead of innerHTML to prevent XSS
         function showToast(title, message, type = 'info') {
             const toast = document.createElement('div');
             toast.className = `toast ${type}`;
-            toast.innerHTML = `
-                <div class="toast-title">${title}</div>
-                <div class="toast-message">${message}</div>
-            `;
+            
+            const titleEl = document.createElement('div');
+            titleEl.className = 'toast-title';
+            titleEl.textContent = String(title);
+            
+            const msgEl = document.createElement('div');
+            msgEl.className = 'toast-message';
+            msgEl.textContent = String(message);
+            
+            toast.appendChild(titleEl);
+            toast.appendChild(msgEl);
             toastContainer.appendChild(toast);
             setTimeout(() => toast.remove(), 3000);
         }
@@ -779,7 +1018,7 @@
                 avatar.className = 'peer-avatar';
                 avatar.style.backgroundColor = color;
                 avatar.textContent = 'P' + (Array.from(connections.keys()).indexOf(peerId) + 1);
-                avatar.title = `Peer ${peerId}`;
+                avatar.title = `Peer ${sanitizePeerId(peerId)}`;
                 peersList.appendChild(avatar);
             });
 
@@ -795,8 +1034,9 @@
         function getPeerColor(peerId) {
             // Generate consistent color based on peerId hash
             let hash = 0;
-            for (let i = 0; i < peerId.length; i++) {
-                hash = ((hash << 5) - hash) + peerId.charCodeAt(i);
+            const safeId = sanitizePeerId(peerId);
+            for (let i = 0; i < safeId.length; i++) {
+                hash = ((hash << 5) - hash) + safeId.charCodeAt(i);
                 hash = hash & hash; // Convert to 32bit integer
             }
             return CURSOR_COLORS[Math.abs(hash) % CURSOR_COLORS.length];
@@ -804,50 +1044,116 @@
 
         // ==================== CANVAS SETUP ====================
         function resizeCanvas() {
-            const rect = container.getBoundingClientRect();
-            const newWidth = Math.floor(rect.width);
-            const newHeight = Math.floor(rect.height);
-
-            // Only resize if dimensions actually changed
-            if (canvas.width === newWidth && canvas.height === newHeight) {
-                return;
+            // Debounce resize to prevent race conditions
+            if (resizeTimeout) {
+                clearTimeout(resizeTimeout);
             }
+            resizeTimeout = setTimeout(() => {
+                const rect = container.getBoundingClientRect();
+                const newWidth = Math.floor(rect.width);
+                const newHeight = Math.floor(rect.height);
 
-            canvas.width = newWidth;
-            canvas.height = newHeight;
+                // Only resize if dimensions actually changed
+                if (canvas.width === newWidth && canvas.height === newHeight) {
+                    return;
+                }
 
-            // Redraw all strokes
-            redrawCanvas();
+                // Save current canvas content if any
+                let savedImage = null;
+                if (canvas.width > 0 && canvas.height > 0) {
+                    try {
+                        savedImage = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    } catch (e) {
+                        console.warn('Could not save canvas state:', e);
+                    }
+                }
+
+                canvas.width = newWidth;
+                canvas.height = newHeight;
+
+                // Restore content or redraw all strokes
+                if (savedImage) {
+                    try {
+                        ctx.putImageData(savedImage, 0, 0);
+                    } catch (e) {
+                        redrawCanvas();
+                    }
+                } else {
+                    redrawCanvas();
+                }
+            }, 100); // 100ms debounce
         }
 
         window.addEventListener('resize', resizeCanvas);
         resizeCanvas();
 
         // ==================== DRAWING FUNCTIONS ====================
+        
+        // FIX: Handle both touches and changedTouches for touch events
         function getCoordinates(e) {
             const rect = canvas.getBoundingClientRect();
-            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            let clientX, clientY;
+            
+            if (e.touches && e.touches.length > 0) {
+                // touchstart, touchmove
+                clientX = e.touches[0].clientX;
+                clientY = e.touches[0].clientY;
+            } else if (e.changedTouches && e.changedTouches.length > 0) {
+                // touchend, touchcancel
+                clientX = e.changedTouches[0].clientX;
+                clientY = e.changedTouches[0].clientY;
+            } else {
+                // mouse events
+                clientX = e.clientX;
+                clientY = e.clientY;
+            }
+            
             return {
                 x: clientX - rect.left,
                 y: clientY - rect.top
             };
         }
 
-        // Convert screen coordinates to world coordinates
+        // Convert screen coordinates to world coordinates (accounting for zoom)
         function screenToWorld(sx, sy) {
             return {
-                x: sx - viewOffsetX,
-                y: sy - viewOffsetY
+                x: (sx - viewOffsetX) / zoomLevel,
+                y: (sy - viewOffsetY) / zoomLevel
             };
         }
 
-        // Convert world coordinates to screen coordinates
+        // Convert world coordinates to screen coordinates (accounting for zoom)
         function worldToScreen(wx, wy) {
             return {
-                x: wx + viewOffsetX,
-                y: wy + viewOffsetY
+                x: wx * zoomLevel + viewOffsetX,
+                y: wy * zoomLevel + viewOffsetY
             };
+        }
+
+        // Get bounding box of a stroke for viewport culling
+        function getStrokeBounds(stroke) {
+            return {
+                minX: Math.min(stroke.x1, stroke.x2) - stroke.size,
+                minY: Math.min(stroke.y1, stroke.y2) - stroke.size,
+                maxX: Math.max(stroke.x1, stroke.x2) + stroke.size,
+                maxY: Math.max(stroke.y1, stroke.y2) + stroke.size
+            };
+        }
+
+        // Check if stroke is visible in current viewport
+        function isStrokeVisible(stroke) {
+            const bounds = getStrokeBounds(stroke);
+            const screenBounds = {
+                minX: -viewOffsetX / zoomLevel,
+                minY: -viewOffsetY / zoomLevel,
+                maxX: (canvas.width - viewOffsetX) / zoomLevel,
+                maxY: (canvas.height - viewOffsetY) / zoomLevel
+            };
+            
+            return !(bounds.maxX < screenBounds.minX || 
+                     bounds.minX > screenBounds.maxX || 
+                     bounds.maxY < screenBounds.minY || 
+                     bounds.minY > screenBounds.maxY);
         }
 
         function startDrawing(e) {
@@ -871,19 +1177,55 @@
 
             // Draw a dot for single click
             const stroke = { x1: lastX, y1: lastY, x2: lastX, y2: lastY, color: currentColor, size: currentSize };
-            strokes.push(stroke);
+            addStroke(stroke);
             drawStroke(stroke);
 
             // Broadcast to peers
             broadcastDraw(lastX, lastY, lastX, lastY, currentColor, currentSize);
         }
 
+        function addStroke(stroke) {
+            // MEMORY LEAK FIX: Limit stroke storage
+            if (strokes.length >= MAX_STROKES) {
+                // Remove oldest strokes in batch
+                strokes.splice(0, STROKE_PRUNE_BATCH);
+                console.log(`Pruned ${STROKE_PRUNE_BATCH} old strokes to prevent memory leak`);
+            }
+            strokes.push(stroke);
+            
+            // Clear redo stack when new action is performed
+            if (redoStack.length > 0) {
+                redoStack = [];
+                updateUndoRedoButtons();
+            }
+            
+            // Add to undo stack
+            undoStack.push({ type: 'draw', stroke: stroke });
+            updateUndoRedoButtons();
+            
+            // Save to localStorage periodically (debounced)
+            debouncedSaveCanvas();
+        }
+
+        let saveTimeout = null;
+        function debouncedSaveCanvas() {
+            if (saveTimeout) {
+                clearTimeout(saveTimeout);
+            }
+            saveTimeout = setTimeout(saveCanvasToStorage, 1000);
+        }
+
         function drawStroke(stroke) {
+            // PERFORMANCE FIX: Only draw if visible in viewport
+            if (!isStrokeVisible(stroke)) {
+                return;
+            }
+            
             const s1 = worldToScreen(stroke.x1, stroke.y1);
             const s2 = worldToScreen(stroke.x2, stroke.y2);
 
             ctx.strokeStyle = stroke.color;
-            ctx.lineWidth = stroke.size;
+            ctx.lineWidth = Math.max(1, stroke.size * zoomLevel);
             ctx.beginPath();
             ctx.moveTo(s1.x, s1.y);
             ctx.lineTo(s2.x, s2.y);
@@ -893,7 +1235,7 @@
         function draw(x1, y1, x2, y2, color, size) {
             // Store stroke in world coordinates
             const stroke = { x1, y1, x2, y2, color, size };
-            strokes.push(stroke);
+            addStroke(stroke);
             drawStroke(stroke);
         }
 
@@ -914,7 +1256,7 @@
             const worldPos = screenToWorld(coords.x, coords.y);
 
             const stroke = { x1: lastX, y1: lastY, x2: worldPos.x, y2: worldPos.y, color: currentColor, size: currentSize };
-            strokes.push(stroke);
+            addStroke(stroke);
             drawStroke(stroke);
             broadcastDraw(lastX, lastY, worldPos.x, worldPos.y, currentColor, currentSize);
 
@@ -933,8 +1275,18 @@
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
 
-            // Draw all strokes with current view offset
-            strokes.forEach(stroke => drawStroke(stroke));
+            // PERFORMANCE FIX: Only draw visible strokes (viewport culling)
+            let drawnCount = 0;
+            strokes.forEach(stroke => {
+                if (isStrokeVisible(stroke)) {
+                    drawStroke(stroke);
+                    drawnCount++;
+                }
+            });
+            
+            if (strokes.length > 1000) {
+                console.log(`Rendered ${drawnCount}/${strokes.length} strokes (viewport culling)`);
+            }
         }
 
         function clearCanvas() {
@@ -943,12 +1295,95 @@
                 return;
             }
 
+            // Add to undo stack before clearing
+            if (strokes.length > 0) {
+                undoStack.push({ type: 'clear', strokes: [...strokes] });
+                updateUndoRedoButtons();
+            }
+
             strokes = [];
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             broadcast({ type: 'clear' });
+            clearCanvasStorage();
             showToast('Canvas Cleared', 'The whiteboard has been cleared');
         }
 
+        // ==================== UNDO/REDO ====================
+        function undo() {
+            if (undoStack.length === 0) return;
+            
+            const action = undoStack.pop();
+            redoStack.push(action);
+            
+            if (action.type === 'draw') {
+                // Remove the stroke
+                const idx = strokes.lastIndexOf(action.stroke);
+                if (idx >= 0) {
+                    strokes.splice(idx, 1);
+                }
+            } else if (action.type === 'clear') {
+                // Restore cleared strokes
+                strokes = action.strokes;
+            }
+            
+            redrawCanvas();
+            updateUndoRedoButtons();
+            debouncedSaveCanvas();
+            
+            // Notify peers of undo (optional - for now just local)
+            showToast('Undo', 'Action undone');
+        }
+
+        function redo() {
+            if (redoStack.length === 0) return;
+            
+            const action = redoStack.pop();
+            undoStack.push(action);
+            
+            if (action.type === 'draw') {
+                // Re-add the stroke
+                strokes.push(action.stroke);
+            } else if (action.type === 'clear') {
+                // Re-clear
+                strokes = [];
+            }
+            
+            redrawCanvas();
+            updateUndoRedoButtons();
+            debouncedSaveCanvas();
+            
+            showToast('Redo', 'Action redone');
+        }
+
+        function updateUndoRedoButtons() {
+            undoBtn.disabled = undoStack.length === 0;
+            redoBtn.disabled = redoStack.length === 0;
+        }
+
+        // ==================== ZOOM CONTROLS ====================
+        function zoomIn() {
+            zoomLevel = Math.min(5, zoomLevel * 1.2);
+            updateZoomDisplay();
+            redrawCanvas();
+        }
+
+        function zoomOut() {
+            zoomLevel = Math.max(0.1, zoomLevel / 1.2);
+            updateZoomDisplay();
+            redrawCanvas();
+        }
+
+        function resetZoom() {
+            zoomLevel = 1.0;
+            updateZoomDisplay();
+            redrawCanvas();
+        }
+
+        function updateZoomDisplay() {
+            zoomLevelDisplay.textContent = Math.round(zoomLevel * 100) + '%';
+        }
+
+        // ==================== PEER COMMUNICATION ====================
         function broadcastDraw(x1, y1, x2, y2, color, size) {
             broadcast({
                 type: 'draw',
@@ -1013,19 +1448,32 @@
             removePeerCursor(peerId);
 
             const color = getPeerColor(peerId);
+            const safeId = sanitizePeerId(peerId);
 
             const cursor = document.createElement('div');
             cursor.className = 'peer-cursor';
-            cursor.dataset.peerId = peerId;
+            cursor.dataset.peerId = safeId;
 
             const peerIndex = Array.from(connections.keys()).indexOf(peerId) + 1;
 
-            cursor.innerHTML = `
-                <svg viewBox="0 0 24 24" fill="${color}" stroke="white" stroke-width="1">
-                    <path d="M5.5 3.21V20.8c0 .45.54.67.85.35l4.86-4.86a.5.5 0 0 1 .35-.15h6.87a.5.5 0 0 0 .35-.85L6.35 2.85a.5.5 0 0 0-.85.35Z"/>
-                </svg>
-                <span class="peer-label">P${peerIndex}</span>
-            `;
+            // SECURITY FIX: Use DOM methods instead of innerHTML
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('viewBox', '0 0 24 24');
+            svg.setAttribute('fill', color);
+            svg.setAttribute('stroke', 'white');
+            svg.setAttribute('stroke-width', '1');
+            
+            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            path.setAttribute('d', 'M5.5 3.21V20.8c0 .45.54.67.85.35l4.86-4.86a.5.5 0 0 1 .35-.15h6.87a.5.5 0 0 0 .35-.85L6.35 2.85a.5.5 0 0 0-.85.35Z');
+            
+            svg.appendChild(path);
+            
+            const label = document.createElement('span');
+            label.className = 'peer-label';
+            label.textContent = `P${peerIndex}`;
+            
+            cursor.appendChild(svg);
+            cursor.appendChild(label);
             container.appendChild(cursor);
             peerCursors.set(peerId, cursor);
 
@@ -1110,6 +1558,7 @@
                 isHost = true;
                 joinModal.classList.add('hidden');
                 showToast('Room Created', `Room code: ${roomCode}`, 'success');
+                updateRoomButtons();
             });
 
             peer.on('connection', (conn) => {
@@ -1136,6 +1585,7 @@
                 console.log('Peer connection closed');
                 updateStatus('', 'Offline');
                 cleanupConnections();
+                updateRoomButtons();
             });
 
             peer.on('error', (err) => {
@@ -1173,6 +1623,10 @@
             }
             cleanupConnections();
             isHost = false;
+            roomCode = null;
+            roomCodeDisplay.textContent = '------';
+            updateStatus('', 'Offline');
+            updateRoomButtons();
         }
 
         function cleanupConnections() {
@@ -1278,6 +1732,7 @@
                     updateStatus('connected', 'Connected');
                     joinModal.classList.add('hidden');
                     showToast('Joined Room', `Connected to ${roomCode}`, 'success');
+                    updateRoomButtons();
                 });
 
                 conn.on('error', (err) => {
@@ -1328,6 +1783,7 @@
                 console.log('Peer connection closed');
                 updateStatus('', 'Offline');
                 cleanupConnections();
+                updateRoomButtons();
             });
 
             peer.on('error', (err) => {
@@ -1350,6 +1806,23 @@
                 cleanupPeer();
                 joinModal.classList.remove('hidden');
             });
+        }
+
+        function updateRoomButtons() {
+            if (roomCode) {
+                joinRoomBtn.classList.add('hidden');
+                leaveRoomBtn.classList.remove('hidden');
+            } else {
+                joinRoomBtn.classList.remove('hidden');
+                leaveRoomBtn.classList.add('hidden');
+            }
+        }
+
+        function leaveRoom() {
+            if (confirm('Leave the current room? Your canvas will be saved locally.')) {
+                cleanupPeer();
+                showToast('Left Room', 'You have left the room');
+            }
         }
 
         function handleConnection(conn, isHostConnection = false) {
@@ -1410,7 +1883,7 @@
                 }
 
                 updatePeersList();
-                showToast('Peer Connected', `New peer joined`, 'success');
+                showToast('Peer Connected', 'New peer joined', 'success');
 
                 // Send current canvas state to new peer (if host) - with delay and chunking
                 if (isHost) {
@@ -1516,13 +1989,25 @@
 
             switch (data.type) {
                 case 'draw':
-                    if (data.x1 !== undefined && data.y1 !== undefined &&
-                        data.x2 !== undefined && data.y2 !== undefined &&
-                        data.color && data.size !== undefined) {
+                    if (typeof data.x1 === 'number' && typeof data.y1 === 'number' &&
+                        typeof data.x2 === 'number' && typeof data.y2 === 'number' &&
+                        typeof data.color === 'string' && typeof data.size === 'number') {
+                        // SECURITY FIX: Sanitize color to prevent injection
+                        const sanitizedColor = sanitizeHtml(data.color).substring(0, 20);
+                        const sanitizedSize = Math.max(1, Math.min(100, data.size));
+                        
                         // Store stroke and draw it
-                        const stroke = { x1: data.x1, y1: data.y1, x2: data.x2, y2: data.y2, color: data.color, size: data.size };
+                        const stroke = { 
+                            x1: data.x1, 
+                            y1: data.y1, 
+                            x2: data.x2, 
+                            y2: data.y2, 
+                            color: sanitizedColor, 
+                            size: sanitizedSize 
+                        };
                         strokes.push(stroke);
                         drawStroke(stroke);
+                        debouncedSaveCanvas();
                     }
                     break;
                 case 'clear':
@@ -1532,16 +2017,18 @@
                 case 'cursor':
                     if (data.visible === false) {
                         removePeerCursor(peerId);
-                    } else if (data.x !== undefined && data.y !== undefined) {
+                    } else if (typeof data.x === 'number' && typeof data.y === 'number') {
                         updatePeerCursor(peerId, data.x, data.y);
                     }
                     break;
                 case 'canvas':
-                    // Received full canvas state
-                    if (!data.data || typeof data.data !== 'string') {
+                    // SECURITY FIX: Validate canvas data URL before loading
+                    const safeDataUrl = sanitizeCanvasDataUrl(data.data);
+                    if (!safeDataUrl) {
                         console.error('Received empty or invalid canvas data');
                         break;
                     }
+                    
                     const img = new Image();
                     img.onload = () => {
                         try {
@@ -1553,7 +2040,7 @@
                     img.onerror = () => {
                         console.error('Failed to load canvas image');
                     };
-                    img.src = data.data;
+                    img.src = safeDataUrl;
                     break;
                 case 'ping':
                     // Respond with pong
@@ -1607,6 +2094,7 @@
 
         // ==================== CLEANUP ON PAGE UNLOAD ====================
         window.addEventListener('beforeunload', () => {
+            saveCanvasToStorage();
             cleanupConnections();
             cleanupPeer();
         });
@@ -1645,6 +2133,7 @@
         canvas.addEventListener('touchstart', startDrawing, { passive: false });
         canvas.addEventListener('touchmove', continueDrawing, { passive: false });
         canvas.addEventListener('touchend', stopDrawing);
+        canvas.addEventListener('touchcancel', stopDrawing);
 
         // Color selection
         document.getElementById('colorPalette').addEventListener('click', (e) => {
@@ -1668,6 +2157,15 @@
         // Clear canvas
         document.getElementById('clearBtn').addEventListener('click', clearCanvas);
         
+        // Undo/Redo
+        undoBtn.addEventListener('click', undo);
+        redoBtn.addEventListener('click', redo);
+        
+        // Zoom controls
+        document.getElementById('zoomInBtn').addEventListener('click', zoomIn);
+        document.getElementById('zoomOutBtn').addEventListener('click', zoomOut);
+        document.getElementById('resetZoomBtn').addEventListener('click', resetZoom);
+        
         // Pan tool
         document.getElementById('panBtn').addEventListener('click', () => {
             currentTool = currentTool === 'pan' ? 'pen' : 'pan';
@@ -1678,6 +2176,8 @@
         document.getElementById('resetViewBtn').addEventListener('click', () => {
             viewOffsetX = 0;
             viewOffsetY = 0;
+            zoomLevel = 1.0;
+            updateZoomDisplay();
             redrawCanvas();
         });
         
@@ -1685,12 +2185,91 @@
             document.getElementById('panBtn').classList.toggle('active', currentTool === 'pan');
         }
         
+        // Help modal
+        document.getElementById('helpBtn').addEventListener('click', () => {
+            shortcutsModal.classList.remove('hidden');
+        });
+        
+        document.getElementById('closeShortcutsBtn').addEventListener('click', () => {
+            shortcutsModal.classList.add('hidden');
+        });
+
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
+            // Don't trigger shortcuts when typing in inputs
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+                // Allow Escape to close modals
+                if (e.key === 'Escape') {
+                    joinModal.classList.add('hidden');
+                    shortcutsModal.classList.add('hidden');
+                }
+                return;
+            }
+
+            // Space for pan
             if (e.code === 'Space' && !e.repeat) {
                 e.preventDefault();
                 currentTool = 'pan';
                 updateToolButtons();
+            }
+            
+            // Undo: Ctrl+Z
+            if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+                e.preventDefault();
+                undo();
+            }
+            
+            // Redo: Ctrl+Y or Ctrl+Shift+Z
+            if (((e.ctrlKey || e.metaKey) && e.key === 'y') ||
+                ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'z')) {
+                e.preventDefault();
+                redo();
+            }
+            
+            // Zoom In: Ctrl++ or +
+            if ((e.ctrlKey || e.metaKey) && (e.key === '+' || e.key === '=')) {
+                e.preventDefault();
+                zoomIn();
+            }
+            
+            // Zoom Out: Ctrl+- or -
+            if ((e.ctrlKey || e.metaKey) && e.key === '-') {
+                e.preventDefault();
+                zoomOut();
+            }
+            
+            // Reset Zoom: Ctrl+0
+            if ((e.ctrlKey || e.metaKey) && e.key === '0') {
+                e.preventDefault();
+                resetZoom();
+            }
+            
+            // Download: Ctrl+S
+            if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+                e.preventDefault();
+                document.getElementById('downloadBtn').click();
+            }
+            
+            // Clear: Ctrl+Shift+C
+            if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'C') {
+                e.preventDefault();
+                clearCanvas();
+            }
+            
+            // Leave Room: Escape
+            if (e.key === 'Escape' && roomCode) {
+                e.preventDefault();
+                leaveRoom();
+            }
+            
+            // Help: ?
+            if (e.key === '?' || e.key === 'Slash') {
+                e.preventDefault();
+                if (shortcutsModal.classList.contains('hidden')) {
+                    shortcutsModal.classList.remove('hidden');
+                } else {
+                    shortcutsModal.classList.add('hidden');
+                }
             }
         });
         
@@ -1733,6 +2312,9 @@
             }
         });
 
+        // Leave room
+        leaveRoomBtn.addEventListener('click', leaveRoom);
+
         // Enter key on input
         roomCodeInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
@@ -1753,17 +2335,12 @@
             }
         });
 
-        // Keyboard shortcuts
-        document.addEventListener('keydown', (e) => {
-            // Ctrl/Cmd + Z could be undo (not implemented)
-            // Ctrl/Cmd + Shift + C for clear
-            if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'C') {
-                e.preventDefault();
-                clearCanvas();
-            }
-        });
-
         // ==================== INITIALIZATION ====================
+        // Load saved canvas on startup
+        if (loadCanvasFromStorage()) {
+            console.log('Loaded canvas from localStorage');
+        }
+        
         console.log('CollaBoard initialized');
         console.log('Waiting for user to create or join a room...');
     </script>
