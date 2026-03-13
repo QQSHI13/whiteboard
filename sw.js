@@ -12,29 +12,27 @@ const urlsToCache = [
 // skipWaiting behavior helps us detect this
 let isHardReload = false;
 
+// HIGH PRIORITY FIX: Add counter limit to prevent hard reload loop
+const HARD_RELOAD_MAX_ATTEMPTS = 2;
+
 // ==================== INSTALL EVENT ====================
 self.addEventListener('install', (event) => {
-  console.log('[SW] Install event');
-  
   // Skip waiting immediately - this ensures the new SW activates right away
   self.skipWaiting();
   
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => {
-        console.log('[SW] Caching app shell');
         return cache.addAll(urlsToCache);
       })
       .catch((err) => {
-        console.error('[SW] Cache failed:', err);
+        // Silently handle cache failure
       })
   );
 });
 
 // ==================== ACTIVATE EVENT ====================
 self.addEventListener('activate', (event) => {
-  console.log('[SW] Activate event');
-  
   // Take control of all clients immediately
   event.waitUntil(
     Promise.all([
@@ -44,7 +42,6 @@ self.addEventListener('activate', (event) => {
           cacheNames
             .filter((name) => name !== CACHE_NAME)
             .map((name) => {
-              console.log('[SW] Deleting old cache:', name);
               return caches.delete(name);
             })
         );
@@ -159,13 +156,18 @@ self.addEventListener('message', (event) => {
       break;
       
     case 'HARD_RELOAD_DETECTED':
+      // HIGH PRIORITY FIX: Add counter limit (max 2 attempts) to prevent hard reload loop
+      const reloadCount = parseInt(event.data.attemptCount || '0', 10);
+      if (reloadCount >= HARD_RELOAD_MAX_ATTEMPTS) {
+        // Max attempts reached, don't reload again
+        return;
+      }
+      
       // Client detected a hard reload - clear cache to ensure fresh content
-      console.log('[SW] Hard reload detected from client');
       isHardReload = true;
       
       // Fire-and-forget - no waitUntil for MessageEvent
       caches.delete(CACHE_NAME).then(() => {
-        console.log('[SW] Cache cleared due to hard reload');
         return caches.open(CACHE_NAME).then((cache) => {
           return cache.addAll(urlsToCache);
         });
