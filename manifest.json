@@ -1,15 +1,15 @@
 {
-  "name": "CollaBoard - Collaborative Whiteboard",
+  "name": "CollaBoard",
   "short_name": "CollaBoard",
-  "description": "Real-time collaborative whiteboard for drawing and brainstorming with peers",
-  "start_url": "/",
+  "description": "Real-time collaborative whiteboard",
+  "start_url": ".",
   "display": "standalone",
-  "background_color": "#0d1117",
-  "theme_color": "#58a6ff",
+  "background_color": "#0f0f1a",
+  "theme_color": "#5eead4",
   "icons": [
     {
-      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect x='10' y='10' width='172' height='172' rx='20' fill='%2358a6ff'/%3E%3Crect x='45' y='45' width='40' height='40' rx='8' fill='white'/%3E%3Crect x='107' y='45' width='40' height='40' rx='8' fill='white'/%3E%3Crect x='45' y='107' width='40' height='40' rx='8' fill='white'/%3E%3Crect x='107' y='107' width='40' height='40' rx='8' fill='white'/%3E%3C/svg%3E",
-      "sizes": "any",
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' fill='%230f0f1a' rx='24'/%3E%3Ctext x='96' y='120' font-size='80' text-anchor='middle' fill='%235eead4'%3E%F0%9F%96%8C%EF%B8%8F%3C/text%3E%3C/svg%3E",
+      "sizes": "192x192",
       "type": "image/svg+xml"
     }
   ]
